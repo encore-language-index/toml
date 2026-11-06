@@ -1,0 +1,35 @@
+import core::dict::Dict
+import core::option::Option
+import core::vec::Vec
+import serialize::{Serializer, Deserializer}
+import toml::{parse, decode, encode, TomlSerializer, TomlDeserializer, toml_get_i64, toml_get_string}
+
+struct Child { enabled: bool values: Vec[i64] }
+struct Config { title: str child: Child optional: Option[str] }
+fn main() -> u32 {
+    let source = "title = \"β\\u03b2\"\n[child]\nenabled = true\nvalues = [-9223372036854775808, 9223372036854775807, 0x10, 1_000]\n"
+    let config = match decode[Config](source) { Ok(value) => value Err(_) => { ret 1 } }
+    if config.title != "ββ" || !config.child.enabled || config.child.values.len() != 4 || config.optional.is_some() { ret 2 }
+    let encoded = match TomlSerializer[Config]::new(config).serialize() { Ok(value) => value Err(_) => { ret 3 } }
+    match TomlDeserializer[Config]::new(encoded).deserialize() {
+        Ok(value) => { if value.title != config.title || value.child.values.len() != 4 || value.optional.is_some() { ret 4 } }
+        Err(_) => { ret 5 }
+    }
+    let invalid = Vec[str]::new()
+    let mut cases = invalid
+    cases.push("key = garbage") cases.push("key = 9223372036854775808")
+    cases.push("key = 01") cases.push("key = 1__0") cases.push("key = \"bad\\q\"")
+    cases.push("key = [1 2]") cases.push("key = 1\nkey = 2")
+    cases.push("[a]\n[a]") cases.push("a.b = 1\n[a]") cases.push("a = []\n[[a]]") cases.push("key = {a=1,}") cases.push("key = 2026-02-30")
+    for text in cases { if parse(text).is_ok() { ret 6 } }
+    match parse("[a]\nkey = unknown") {
+        Err(error) => { if error.line() != 2 || error.position() < 4 { ret 7 } }
+        Ok(_) => { ret 8 }
+    }
+    match parse("large = 9223372036854775807\n'a.b' = 'value'\n") {
+        Ok(doc) => { if toml_get_i64(doc, "", "large").unwrap_or(0) != 9223372036854775807_i64 || toml_get_string(doc, "", "a.b").unwrap_or("") != "value" { ret 9 } }
+        Err(_) => { ret 10 }
+    }
+    if parse("x = 1.25e+2\ny = [[1,2],[3,4]]\nz = {a='x', b=true}\ndate = 2024-02-29T12:34:56Z\n").is_err() { ret 11 }
+    ret 0
+}

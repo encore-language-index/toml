@@ -44,7 +44,7 @@ fn main() -> u32 {
     cases.push("key = garbage") cases.push("key = 9223372036854775808")
     cases.push("key = 01") cases.push("key = 1__0") cases.push("key = \"bad\\q\"")
     cases.push("key = [1 2]") cases.push("key = 1\nkey = 2")
-    cases.push("[a]\n[a]") cases.push("a.b = 1\n[a]") cases.push("a = []\n[[a]]") cases.push("key = {a=1,}") cases.push("key = 2026-02-30")
+    cases.push("[a]\n[a]") cases.push("[[a]]\n[a]") cases.push("a.b = 1\n[a]") cases.push("a = []\n[[a]]") cases.push("key = {a=1,}") cases.push("key = 2026-02-30")
     for text in cases {
         if parse(text).is_ok() {
             ret 6

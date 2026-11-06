@@ -336,7 +336,7 @@ fn key_path(parser: mut Parser) -> Result[Vec[str], ParseError] {
     }
     ret Result::Ok(keys)
 }
-fn path_table(parser: mut Parser, root: Dict[str, TomlValue], path: Vec[str], end: usize, dotted: bool, declare: bool) -> Result[Dict[str, TomlValue], ParseError] {
+fn path_table(parser: mut Parser, root: mut Dict[str, TomlValue], path: Vec[str], end: usize, dotted: bool, declare: bool) -> Result[Dict[str, TomlValue], ParseError] {
     let mut current = root
     for i in 0..end {
         let key = path.get(i).unwrap_or("")
@@ -353,6 +353,9 @@ fn path_table(parser: mut Parser, root: Dict[str, TomlValue], path: Vec[str], en
                         current = table
                     }
                     TomlValue::TableArray(items) => {
+                        if declare && i + 1 == end {
+                            ret Result::Err(fail(parser, "array table cannot be redeclared as an ordinary table"))
+                        }
                         match items.last().unwrap_or(TomlValue::Absent) {
                             TomlValue::Table(table) => {
                                 current = table
@@ -369,7 +372,7 @@ fn path_table(parser: mut Parser, root: Dict[str, TomlValue], path: Vec[str], en
             }
             None => {
                 charge(parser, 1, 4096)?
-                let table = Dict[str, TomlValue]::with_capacity(0)
+                let mut table = Dict[str, TomlValue]::with_capacity(0)
                 current.insert(key, if dotted {
                         TomlValue::DottedTable(table)
                     } else {
@@ -382,7 +385,7 @@ fn path_table(parser: mut Parser, root: Dict[str, TomlValue], path: Vec[str], en
     }
     ret Result::Ok(current)
 }
-fn assignment(parser: mut Parser, table: Dict[str, TomlValue], depth: usize) -> Result[(), ParseError] {
+fn assignment(parser: mut Parser, table: mut Dict[str, TomlValue], depth: usize) -> Result[(), ParseError] {
     let path = key_path(parser)?
     expect(parser, 61)? horizontal(parser)
     let value = parse_value(parser, depth + path.len())?
@@ -425,7 +428,7 @@ fn parse_value(parser: mut Parser, depth: usize) -> Result[TomlValue, ParseError
     }
     if value == 123 {
         parser.index += 1 charge(parser, 1, 4096)?
-        let table = Dict[str, TomlValue]::new()
+        let mut table = Dict[str, TomlValue]::new()
         horizontal(parser)
         if byte(parser) != 125 {
             loop {
@@ -690,7 +693,7 @@ pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, Pa
         ret Result::Err(fail(parser, "invalid UTF-8 document"))
     }
     charge(parser, 1, 8192)?
-    let root = Dict[str, TomlValue]::with_capacity(0)
+    let mut root = Dict[str, TomlValue]::with_capacity(0)
     let mut sections = Dict[str, Dict[str, TomlValue]]::new()
     let mut declared = Dict[str, bool]::new()
     let mut current = root
@@ -800,7 +803,9 @@ pub fn toml_parse_document(source: str) -> TomlDocument {
         Err(error) => {
             panic("TOML: " + error.message() + " at " + Debug::fmt(error.line()) + ":" + Debug::fmt(error.column()))
             // panic exits the process; the seed has no never-return type.
-            ret TomlDocument { Dict[str, TomlValue]::new(), Dict[str, Dict[str, TomlValue]]::new(), 0 }
+            ret TomlDocument {
+                Dict[str, TomlValue]::new(), Dict[str, Dict[str, TomlValue]]::new(), 0
+            }
         }
     }
 }
@@ -857,32 +862,23 @@ pub fn toml_get_integer(doc: TomlDocument, section: str, key: str) -> Option[i32
     ret Option::None
 }
 pub fn toml_get_string_array(doc: TomlDocument, section: str, key: str) -> Option[Vec[str]] {
-    match toml_get(doc, section, key) {
-        Some(value) => match value {
-            TomlValue::StringArray(values) => {
-                ret Option::Some(values)
-            }
-            TomlValue::Array(values) => {
-                let mut out = Vec[str]::with_capacity(values.len())
-                for value in values {
-                    match value {
-                        TomlValue::String(text) => {
-                            out.push(text)
-                        }
-                        _ => {
-                            ret Option::None
-                        }
-                    }
+    let value = match toml_get(doc, section, key) {
+        Some(value) => value
+        None => { ret Option::None }
+    }
+    match value {
+        TomlValue::StringArray(values) => { ret Option::Some(values) }
+        TomlValue::Array(values) => {
+            let mut out = Vec[str]::with_capacity(values.len())
+            for value in values {
+                match value {
+                    TomlValue::String(text) => { out.push(text) }
+                    _ => { ret Option::None }
                 }
-                ret Option::Some(out)
             }
-            _ => {
-                ret Option::None
-            }
+            ret Option::Some(out)
         }
-        None => {
-            ret Option::None
-        }
+        _ => { ret Option::None }
     }
 }
 pub fn toml_section_keys(doc: TomlDocument, section: str) -> Vec[str] {

@@ -1,11 +1,12 @@
 //! Checked TOML documents, hash-indexed tables, and typed serialization.
 import core::fmt::Debug
 import core::dict::Dict
+import core::num::parse_radix
 import core::option::Option
+import core::panic::panic
 import core::result::Result
 import core::vec::Vec
-import core::num::parse_radix
-import core::panic::panic
+
 import serialize::{Error, ErrorKind, Limits}
 
 extern fn encore_str_from_codepoint(value: usize) -> str
@@ -26,54 +27,95 @@ pub enum TomlValue {
     StringArray(Vec[str])
     Absent
 }
+
 impl for TomlValue {
-    pub fn is_null(self: Self) -> bool { ret match self { TomlValue::Absent => true _ => false } }
+    pub fn is_null(self: Self) -> bool {
+        ret match self {
+            TomlValue::Absent => true _ => false
+        }
+    }
 }
-pub struct TomlEntry { key: str value: TomlValue }
-pub struct TomlSection { name: str entries: Vec[TomlEntry] }
+pub struct TomlEntry {
+    key: str
+    value: TomlValue
+}
+pub struct TomlSection {
+    name: str
+    entries: Vec[TomlEntry]
+}
 pub struct TomlDocument {
     root: Dict[str, TomlValue]
     sections: Dict[str, Dict[str, TomlValue]]
     allocated: usize
 }
-pub struct ParseError { description: str input_offset: usize input_line: usize input_column: usize }
-impl for ParseError {
-    pub fn message(self: Self) -> str { ret self.description }
-    pub fn position(self: Self) -> usize { ret self.input_offset }
-    pub fn line(self: Self) -> usize { ret self.input_line }
-    pub fn column(self: Self) -> usize { ret self.input_column }
+pub struct ParseError {
+    description: str
+    input_offset: usize
+    input_line: usize
+    input_column: usize
 }
-struct Parser { source: str index: usize limits: Limits allocated: usize }
+
+impl for ParseError {
+    pub fn message(self: Self) -> str {
+        ret self.description
+    }
+    pub fn position(self: Self) -> usize {
+        ret self.input_offset
+    }
+    pub fn line(self: Self) -> usize {
+        ret self.input_line
+    }
+    pub fn column(self: Self) -> usize {
+        ret self.input_column
+    }
+}
+struct Parser {
+    source: str
+    index: usize
+    limits: Limits
+    allocated: usize
+}
 fn fail(parser: Parser, message: str) -> ParseError {
     let mut line = 1_usize
     let mut column = 1_usize
     for i in 0..parser.index {
-        if parser.source.byte_at(i) == 10 { line += 1 column = 1 }
-        else { column += 1 }
+        if parser.source.byte_at(i) == 10 {
+            line += 1 column = 1
+        } else {
+            column += 1
+        }
     }
     ret ParseError { message, parser.index, line, column }
 }
 fn byte(parser: Parser) -> u8 {
-    if parser.index >= parser.source.byte_len() { ret 0 }
+    if parser.index >= parser.source.byte_len() {
+        ret 0
+    }
     ret parser.source.byte_at(parser.index)
 }
 fn at(parser: Parser, offset: usize) -> u8 {
-    if offset >= parser.source.byte_len() - parser.index { ret 0 }
+    if offset >= parser.source.byte_len() - parser.index {
+        ret 0
+    }
     ret parser.source.byte_at(parser.index + offset)
 }
 fn charge(parser: mut Parser, count: usize, size: usize) -> Result[(), ParseError] {
-    if size != 0 && count > (parser.limits.max_allocation_bytes() - parser.allocated) / size {
+    if size != 0 && count >(parser.limits.max_allocation_bytes() - parser.allocated) / size {
         ret Result::Err(fail(parser, "TOML allocation limit exceeded"))
     }
     parser.allocated += count * size
     ret Result::Ok(())
 }
 fn horizontal(parser: mut Parser) ->() {
-    while byte(parser) == 32 || byte(parser) == 9 { parser.index += 1 }
+    while byte(parser) == 32 || byte(parser) == 9 {
+        parser.index += 1
+    }
 }
 fn comment(parser: mut Parser) -> Result[(), ParseError] {
     while parser.index < parser.source.byte_len() && byte(parser) != 10 && byte(parser) != 13 {
-        if (byte(parser) < 32 && byte(parser) != 9) || byte(parser) == 127 { ret Result::Err(fail(parser, "control character in comment")) }
+        if (byte(parser) < 32 && byte(parser) != 9) || byte(parser) == 127 {
+            ret Result::Err(fail(parser, "control character in comment"))
+        }
         parser.index += 1
     }
     ret Result::Ok(())
@@ -81,37 +123,61 @@ fn comment(parser: mut Parser) -> Result[(), ParseError] {
 fn line_break(parser: mut Parser) -> Result[(), ParseError] {
     if byte(parser) == 13 {
         parser.index += 1
-        if byte(parser) != 10 { ret Result::Err(fail(parser, "expected LF after CR")) }
+        if byte(parser) != 10 {
+            ret Result::Err(fail(parser, "expected LF after CR"))
+        }
     }
-    if byte(parser) == 10 { parser.index += 1 }
+    if byte(parser) == 10 {
+        parser.index += 1
+    }
     ret Result::Ok(())
 }
 fn whitespace(parser: mut Parser) -> Result[(), ParseError] {
     loop {
         horizontal(parser)
-        if byte(parser) == 35 { comment(parser)? }
-        if byte(parser) != 10 && byte(parser) != 13 { break }
+        if byte(parser) == 35 {
+            comment(parser)?
+        }
+        if byte(parser) != 10 && byte(parser) != 13 {
+            break
+        }
         line_break(parser)?
     }
     ret Result::Ok(())
 }
 fn expect(parser: mut Parser, expected: u8) -> Result[(), ParseError] {
-    if byte(parser) != expected { ret Result::Err(fail(parser, "unexpected TOML token")) }
+    if byte(parser) != expected {
+        ret Result::Err(fail(parser, "unexpected TOML token"))
+    }
     parser.index += 1 ret Result::Ok(())
 }
 fn hex(value: u8) -> usize {
-    if value >= 48 && value <= 57 { ret (value - 48) as usize }
-    if value >= 65 && value <= 70 { ret (value - 65 + 10) as usize }
-    if value >= 97 && value <= 102 { ret (value - 97 + 10) as usize }
+    if value >= 48 && value <= 57 {
+        ret(value - 48) as usize
+    }
+    if value >= 65 && value <= 70 {
+        ret(value - 65 + 10) as usize
+    }
+    if value >= 97 && value <= 102 {
+        ret(value - 97 + 10) as usize
+    }
     ret 16
 }
 fn string_value(parser: mut Parser, key: bool) -> Result[str, ParseError] {
     let quote = byte(parser)
     let basic = quote == 34
     let multiline = !key && at(parser, 1) == quote && at(parser, 2) == quote
-    parser.index += if multiline { 3_usize } else { 1_usize }
-    if multiline && (byte(parser) == 10 || byte(parser) == 13) { line_break(parser)? }
-    let builder = unsafe { encore_codec_text_builder_new(parser.limits.max_allocation_bytes() - parser.allocated) }
+    parser.index += if multiline {
+        3_usize
+    } else {
+        1_usize
+    }
+    if multiline &&(byte(parser) == 10 || byte(parser) == 13) {
+        line_break(parser)?
+    }
+    let builder = unsafe {
+        encore_codec_text_builder_new(parser.limits.max_allocation_bytes() - parser.allocated)
+    }
     let result = string_body(parser, quote, basic, multiline, builder)
     match result {
         Ok(_) => {
@@ -119,7 +185,9 @@ fn string_value(parser: mut Parser, key: bool) -> Result[str, ParseError] {
             charge(parser, value.byte_len(), 2)?
             ret Result::Ok(value)
         }
-        Err(error) => { text_builder_discard(builder) ret Result::Err(error) }
+        Err(error) => {
+            text_builder_discard(builder) ret Result::Err(error)
+        }
     }
 }
 fn string_body(parser: mut Parser, quote: u8, basic: bool, multiline: bool, builder: usize) -> Result[(), ParseError] {
@@ -127,58 +195,107 @@ fn string_body(parser: mut Parser, quote: u8, basic: bool, multiline: bool, buil
     while parser.index < parser.source.byte_len() {
         let value = byte(parser)
         if value == quote {
-            if !multiline || (at(parser, 1) == quote && at(parser, 2) == quote) {
+            if !multiline ||(at(parser, 1) == quote && at(parser, 2) == quote) {
                 text_builder_append(builder, parser.source.slice_bytes(segment, parser.index - segment))
-                parser.index += if multiline { 3_usize } else { 1_usize }
+                parser.index += if multiline {
+                    3_usize
+                } else {
+                    1_usize
+                }
                 if multiline {
                     let mut extra = 0_usize
                     while byte(parser) == quote && extra < 2 {
-                        text_builder_append(builder, if basic { "\"" } else { "'" })
+                        text_builder_append(builder, if basic {
+                                "\""
+                            } else {
+                                "'"
+                            }
+                            ,
+                        )
                         parser.index += 1 extra += 1
                     }
                 }
-                if !unsafe { encore_codec_text_builder_ok(builder) } { ret Result::Err(fail(parser, "TOML string limit exceeded")) }
+                if !unsafe {
+                    encore_codec_text_builder_ok(builder)
+                }
+                {
+                    ret Result::Err(fail(parser, "TOML string limit exceeded"))
+                }
                 ret Result::Ok(())
             }
         }
         if value == 13 || value == 10 {
-            if !multiline { ret Result::Err(fail(parser, "newline in single-line string")) }
+            if !multiline {
+                ret Result::Err(fail(parser, "newline in single-line string"))
+            }
             text_builder_append(builder, parser.source.slice_bytes(segment, parser.index - segment))
             line_break(parser)? text_builder_append(builder, "\n") segment = parser.index continue
         }
-        if (value < 32 && value != 9) || value == 127 { ret Result::Err(fail(parser, "control character in string")) }
+        if (value < 32 && value != 9) || value == 127 {
+            ret Result::Err(fail(parser, "control character in string"))
+        }
         if basic && value == 92 {
             text_builder_append(builder, parser.source.slice_bytes(segment, parser.index - segment))
             parser.index += 1
+            if parser.index >= parser.source.byte_len() {
+                ret Result::Err(fail(parser, "unterminated string escape"))
+            }
             let escape = byte(parser)
-            if multiline && (escape == 32 || escape == 9 || escape == 13 || escape == 10) {
+            if multiline &&(escape == 32 || escape == 9 || escape == 13 || escape == 10) {
                 horizontal(parser)
-                if byte(parser) != 13 && byte(parser) != 10 { ret Result::Err(fail(parser, "expected newline after continuation")) }
+                if byte(parser) != 13 && byte(parser) != 10 {
+                    ret Result::Err(fail(parser, "expected newline after continuation"))
+                }
                 line_break(parser)?
                 while byte(parser) == 32 || byte(parser) == 9 || byte(parser) == 13 || byte(parser) == 10 {
-                    if byte(parser) == 13 || byte(parser) == 10 { line_break(parser)? } else { parser.index += 1 }
+                    if byte(parser) == 13 || byte(parser) == 10 {
+                        line_break(parser)?
+                    } else {
+                        parser.index += 1
+                    }
                 }
                 segment = parser.index continue
             }
             parser.index += 1
-            if escape == 34 { text_builder_append(builder, "\"") }
-            elif escape == 92 { text_builder_append(builder, "\\") }
-            elif escape == 98 { text_builder_append(builder, "\b") }
-            elif escape == 102 { text_builder_append(builder, "\f") }
-            elif escape == 110 { text_builder_append(builder, "\n") }
-            elif escape == 114 { text_builder_append(builder, "\r") }
-            elif escape == 116 { text_builder_append(builder, "\t") }
-            elif escape == 117 || escape == 85 {
-                let digits = if escape == 117 { 4_usize } else { 8_usize }
+            if escape == 34 {
+                text_builder_append(builder, "\"")
+            } elif escape == 92 {
+                text_builder_append(builder, "\\")
+            } elif escape == 98 {
+                text_builder_append(builder, "\b")
+            } elif escape == 102 {
+                text_builder_append(builder, "\f")
+            } elif escape == 110 {
+                text_builder_append(builder, "\n")
+            } elif escape == 114 {
+                text_builder_append(builder, "\r")
+            } elif escape == 116 {
+                text_builder_append(builder, "\t")
+            } elif escape == 117 || escape == 85 {
+                let digits = if escape == 117 {
+                    4_usize
+                } else {
+                    8_usize
+                }
                 let mut code = 0_usize
                 for _ in 0..digits {
                     let digit = hex(byte(parser))
-                    if digit == 16 { ret Result::Err(fail(parser, "invalid Unicode escape")) }
+                    if digit == 16 {
+                        ret Result::Err(fail(parser, "invalid Unicode escape"))
+                    }
                     code = code * 16 + digit parser.index += 1
                 }
-                if code > 1114111 || (code >= 55296 && code <= 57343) { ret Result::Err(fail(parser, "invalid Unicode scalar")) }
-                text_builder_append(builder, unsafe { encore_str_from_codepoint(code) })
-            } else { ret Result::Err(fail(parser, "invalid string escape")) }
+                if code > 1114111 ||(code >= 55296 && code <= 57343) {
+                    ret Result::Err(fail(parser, "invalid Unicode scalar"))
+                }
+                text_builder_append(builder, unsafe {
+                        encore_str_from_codepoint(code)
+                    }
+                    ,
+                )
+            } else {
+                ret Result::Err(fail(parser, "invalid string escape"))
+            }
             segment = parser.index continue
         }
         parser.index += 1
@@ -186,26 +303,35 @@ fn string_body(parser: mut Parser, quote: u8, basic: bool, multiline: bool, buil
     ret Result::Err(fail(parser, "unterminated string"))
 }
 fn bare_key(value: u8) -> bool {
-    ret (value >= 65 && value <= 90) || (value >= 97 && value <= 122) ||
-        (value >= 48 && value <= 57) || value == 45 || value == 95
+    ret(value >= 65 && value <= 90) ||(value >= 97 && value <= 122) ||
+    (value >= 48 && value <= 57) || value == 45 || value == 95
 }
 fn key_path(parser: mut Parser) -> Result[Vec[str], ParseError] {
     let mut keys = Vec[str]::new()
     loop {
         horizontal(parser)
         let mut key = ""
-        if byte(parser) == 34 || byte(parser) == 39 { key = string_value(parser, true)? }
-        else {
+        if byte(parser) == 34 || byte(parser) == 39 {
+            key = string_value(parser, true)?
+        } else {
             let start = parser.index
-            while bare_key(byte(parser)) { parser.index += 1 }
-            if start == parser.index { ret Result::Err(fail(parser, "expected TOML key")) }
+            while bare_key(byte(parser)) {
+                parser.index += 1
+            }
+            if start == parser.index {
+                ret Result::Err(fail(parser, "expected TOML key"))
+            }
             key = parser.source.slice_bytes(start, parser.index - start)
             charge(parser, key.byte_len(), 1)?
         }
-        if keys.len() >= parser.limits.max_depth() || keys.len() >= parser.limits.max_collection_items() { ret Result::Err(fail(parser, "TOML key depth limit exceeded")) }
+        if keys.len() >= parser.limits.max_depth() || keys.len() >= parser.limits.max_collection_items() {
+            ret Result::Err(fail(parser, "TOML key depth limit exceeded"))
+        }
         charge(parser, 1, 64)? keys.push(key)
         horizontal(parser)
-        if byte(parser) != 46 { break }
+        if byte(parser) != 46 {
+            break
+        }
         parser.index += 1
     }
     ret Result::Ok(keys)
@@ -217,24 +343,40 @@ fn path_table(parser: mut Parser, root: Dict[str, TomlValue], path: Vec[str], en
         match current.get(key) {
             Some(value) => {
                 match value {
-                    TomlValue::Table(table) => { current = table }
+                    TomlValue::Table(table) => {
+                        current = table
+                    }
                     TomlValue::DottedTable(table) => {
-                        if declare && i + 1 == end { ret Result::Err(fail(parser, "table already defined by dotted key")) }
+                        if declare && i + 1 == end {
+                            ret Result::Err(fail(parser, "table already defined by dotted key"))
+                        }
                         current = table
                     }
                     TomlValue::TableArray(items) => {
                         match items.last().unwrap_or(TomlValue::Absent) {
-                            TomlValue::Table(table) => { current = table }
-                            _ => { ret Result::Err(fail(parser, "key is not a table")) }
+                            TomlValue::Table(table) => {
+                                current = table
+                            }
+                            _ => {
+                                ret Result::Err(fail(parser, "key is not a table"))
+                            }
                         }
                     }
-                    _ => { ret Result::Err(fail(parser, "cannot extend an existing value")) }
+                    _ => {
+                        ret Result::Err(fail(parser, "cannot extend an existing value"))
+                    }
                 }
             }
             None => {
                 charge(parser, 1, 4096)?
                 let table = Dict[str, TomlValue]::with_capacity(0)
-                current.insert(key, if dotted { TomlValue::DottedTable(table) } else { TomlValue::Table(table) }) current = table
+                current.insert(key, if dotted {
+                        TomlValue::DottedTable(table)
+                    } else {
+                        TomlValue::Table(table)
+                    }
+                    ,
+                ) current = table
             }
         }
     }
@@ -246,25 +388,37 @@ fn assignment(parser: mut Parser, table: Dict[str, TomlValue], depth: usize) -> 
     let value = parse_value(parser, depth + path.len())?
     let mut destination = path_table(parser, table, path, path.len() - 1, true, false)?
     let name = path.last().unwrap_or("")
-    if destination.contains_key(name) { ret Result::Err(fail(parser, "duplicate TOML key")) }
-    if destination.len() >= parser.limits.max_collection_items() { ret Result::Err(fail(parser, "TOML table limit exceeded")) }
+    if destination.contains_key(name) {
+        ret Result::Err(fail(parser, "duplicate TOML key"))
+    }
+    if destination.len() >= parser.limits.max_collection_items() {
+        ret Result::Err(fail(parser, "TOML table limit exceeded"))
+    }
     charge(parser, 1, 256)? destination.insert(name, value)
     ret Result::Ok(())
 }
 fn parse_value(parser: mut Parser, depth: usize) -> Result[TomlValue, ParseError] {
-    if depth > parser.limits.max_depth() { ret Result::Err(fail(parser, "TOML depth limit exceeded")) }
+    if depth > parser.limits.max_depth() {
+        ret Result::Err(fail(parser, "TOML depth limit exceeded"))
+    }
     let value = byte(parser)
-    if value == 34 || value == 39 { ret Result::Ok(TomlValue::String(string_value(parser, false)?)) }
+    if value == 34 || value == 39 {
+        ret Result::Ok(TomlValue::String(string_value(parser, false)?))
+    }
     if value == 91 {
         parser.index += 1
         charge(parser, 1, 64)?
         let mut items = Vec[TomlValue]::new()
         whitespace(parser)?
         while byte(parser) != 93 {
-            if items.len() >= parser.limits.max_collection_items() { ret Result::Err(fail(parser, "TOML array limit exceeded")) }
+            if items.len() >= parser.limits.max_collection_items() {
+                ret Result::Err(fail(parser, "TOML array limit exceeded"))
+            }
             charge(parser, 1, 256)? items.push(parse_value(parser, depth + 1)?)
             whitespace(parser)?
-            if byte(parser) == 93 { break }
+            if byte(parser) == 93 {
+                break
+            }
             expect(parser, 44)? whitespace(parser)?
         }
         expect(parser, 93)? ret Result::Ok(TomlValue::Array(items))
@@ -276,9 +430,13 @@ fn parse_value(parser: mut Parser, depth: usize) -> Result[TomlValue, ParseError
         if byte(parser) != 125 {
             loop {
                 assignment(parser, table, depth + 1)? horizontal(parser)
-                if byte(parser) == 125 { break }
+                if byte(parser) == 125 {
+                    break
+                }
                 expect(parser, 44)? horizontal(parser)
-                if byte(parser) == 125 { ret Result::Err(fail(parser, "trailing comma in inline table")) }
+                if byte(parser) == 125 {
+                    ret Result::Err(fail(parser, "trailing comma in inline table"))
+                }
             }
         }
         expect(parser, 125)? ret Result::Ok(TomlValue::InlineTable(table))
@@ -286,25 +444,35 @@ fn parse_value(parser: mut Parser, depth: usize) -> Result[TomlValue, ParseError
     let start = parser.index
     while parser.index < parser.source.byte_len() {
         let b = byte(parser)
-        if b == 9 || b == 32 || b == 13 || b == 10 || b == 35 || b == 44 || b == 93 || b == 125 { break }
+        if b == 9 || b == 32 || b == 13 || b == 10 || b == 35 || b == 44 || b == 93 || b == 125 {
+            break
+        }
         parser.index += 1
     }
     let raw = parser.source.slice_bytes(start, parser.index - start)
-    if raw == "true" { ret Result::Ok(TomlValue::Bool(true)) }
-    if raw == "false" { ret Result::Ok(TomlValue::Bool(false)) }
+    if raw == "true" {
+        ret Result::Ok(TomlValue::Bool(true))
+    }
+    if raw == "false" {
+        ret Result::Ok(TomlValue::Bool(false))
+    }
     // Date/time values remain lossless lexical values. The parser validates
     // calendar/time ranges; typed consumers can explicitly request a string.
-    if raw.byte_len() >= 8 && (raw.byte_at(2) == 58 || (raw.byte_len() >= 10 && raw.byte_at(4) == 45)) {
+    if raw.byte_len() >= 8 &&(raw.byte_at(2) == 58 ||(raw.byte_len() >= 10 && raw.byte_at(4) == 45)) {
         if raw.byte_len() == 10 && byte(parser) == 32 && at(parser, 3) == 58 {
             parser.index += 1
             while parser.index < parser.source.byte_len() {
                 let b = byte(parser)
-                if b == 9 || b == 32 || b == 13 || b == 10 || b == 35 || b == 44 || b == 93 || b == 125 { break }
+                if b == 9 || b == 32 || b == 13 || b == 10 || b == 35 || b == 44 || b == 93 || b == 125 {
+                    break
+                }
                 parser.index += 1
             }
         }
         let text = parser.source.slice_bytes(start, parser.index - start)
-        if !date_time_valid(text) { ret Result::Err(fail(parser, "invalid TOML date/time")) }
+        if !date_time_valid(text) {
+            ret Result::Err(fail(parser, "invalid TOML date/time"))
+        }
         charge(parser, text.byte_len(), 1)? ret Result::Ok(TomlValue::DateTime(text))
     }
     ret number_value(parser, raw)
@@ -313,16 +481,28 @@ fn number_value(parser: mut Parser, raw: str) -> Result[TomlValue, ParseError] {
     if raw == "inf" || raw == "+inf" || raw == "-inf" || raw == "nan" || raw == "+nan" || raw == "-nan" {
         ret Result::Ok(TomlValue::Float(raw))
     }
-    if raw.byte_len() == 0 { ret Result::Err(fail(parser, "expected TOML value")) }
+    if raw.byte_len() == 0 {
+        ret Result::Err(fail(parser, "expected TOML value"))
+    }
     let mut clean = ""
     let mut radix = 10_u32
     let mut start = 0_usize
-    if raw.byte_at(0) == 43 || raw.byte_at(0) == 45 { start = 1 }
+    if raw.byte_at(0) == 43 || raw.byte_at(0) == 45 {
+        start = 1
+    }
     if raw.byte_len() > start + 1 && raw.byte_at(start) == 48 {
         let prefix = raw.byte_at(start + 1)
         if prefix == 120 || prefix == 111 || prefix == 98 {
-            if start != 0 { ret Result::Err(fail(parser, "sign on nondecimal integer")) }
-            radix = if prefix == 120 { 16_u32 } elif prefix == 111 { 8_u32 } else { 2_u32 }
+            if start != 0 {
+                ret Result::Err(fail(parser, "sign on nondecimal integer"))
+            }
+            radix = if prefix == 120 {
+                16_u32
+            } elif prefix == 111 {
+                8_u32
+            } else {
+                2_u32
+            }
             start += 2
         }
     }
@@ -330,101 +510,185 @@ fn number_value(parser: mut Parser, raw: str) -> Result[TomlValue, ParseError] {
     for i in start..raw.byte_len() {
         let b = raw.byte_at(i)
         if b == 95 {
-            if i == start || i + 1 >= raw.byte_len() || hex(raw.byte_at(i - 1)) >= (radix as usize) || hex(raw.byte_at(i + 1)) >= (radix as usize) {
+            if i == start || i + 1 >= raw.byte_len() || hex(raw.byte_at(i - 1)) >=(radix as usize) || hex(raw.byte_at(i + 1)) >=(radix as usize) {
                 ret Result::Err(fail(parser, "invalid numeric separator"))
             }
         } else {
-            if radix == 10 && (b == 46 || b == 101 || b == 69) { floating = true }
+            if radix == 10 &&(b == 46 || b == 101 || b == 69) {
+                floating = true
+            }
         }
     }
     // Build once after validation, instead of quadratic per-byte concatenation.
-    let builder = unsafe { encore_codec_text_builder_new(parser.limits.max_allocation_bytes() - parser.allocated) }
-    for i in 0..raw.byte_len() {
-        if raw.byte_at(i) != 95 { text_builder_append(builder, raw.slice_bytes(i, 1)) }
+    let builder = unsafe {
+        encore_codec_text_builder_new(parser.limits.max_allocation_bytes() - parser.allocated)
     }
-    if !unsafe { encore_codec_text_builder_ok(builder) } { text_builder_discard(builder) ret Result::Err(fail(parser, "TOML number limit exceeded")) }
+    for i in 0..raw.byte_len() {
+        if raw.byte_at(i) != 95 {
+            text_builder_append(builder, raw.slice_bytes(i, 1))
+        }
+    }
+    if !unsafe {
+        encore_codec_text_builder_ok(builder)
+    }
+    {
+        text_builder_discard(builder) ret Result::Err(fail(parser, "TOML number limit exceeded"))
+    }
     clean = text_builder_finish(builder)
     charge(parser, clean.byte_len(), 2)?
     if floating {
-        if !float_valid(clean) { ret Result::Err(fail(parser, "invalid TOML float")) }
+        if !float_valid(clean) {
+            ret Result::Err(fail(parser, "invalid TOML float"))
+        }
         ret Result::Ok(TomlValue::Float(clean))
     }
-    if radix == 10 && raw.byte_len() > start + 1 && raw.byte_at(start) == 48 { ret Result::Err(fail(parser, "leading zero in decimal integer")) }
-    match parse_radix[i64](clean, if radix == 10 { 10_u32 } else { 0_u32 }) {
-        Ok(value) => { ret Result::Ok(TomlValue::Integer(value)) }
-        Err(_) => { ret Result::Err(fail(parser, "invalid or out-of-range i64 integer")) }
+    if radix == 10 && raw.byte_len() > start + 1 && raw.byte_at(start) == 48 {
+        ret Result::Err(fail(parser, "leading zero in decimal integer"))
+    }
+    match parse_radix[i64](clean, if radix == 10 {
+            10_u32
+        } else {
+            0_u32
+        }
+        ,
+    ) {
+        Ok(value) => {
+            ret Result::Ok(TomlValue::Integer(value))
+        }
+        Err(_) => {
+            ret Result::Err(fail(parser, "invalid or out-of-range i64 integer"))
+        }
     }
 }
-fn digit(b: u8) -> bool { ret b >= 48 && b <= 57 }
+fn digit(b: u8) -> bool {
+    ret b >= 48 && b <= 57
+}
 fn float_valid(text: str) -> bool {
     let mut i = 0_usize
-    if text.byte_at(0) == 43 || text.byte_at(0) == 45 { i += 1 }
+    if text.byte_at(0) == 43 || text.byte_at(0) == 45 {
+        i += 1
+    }
     let begin = i
-    while i < text.byte_len() && digit(text.byte_at(i)) { i += 1 }
-    if i == begin || (i - begin > 1 && text.byte_at(begin) == 48) { ret false }
+    while i < text.byte_len() && digit(text.byte_at(i)) {
+        i += 1
+    }
+    if i == begin ||(i - begin > 1 && text.byte_at(begin) == 48) {
+        ret false
+    }
     let mut fraction = false
     if i < text.byte_len() && text.byte_at(i) == 46 {
         fraction = true i += 1 let begin = i
-        while i < text.byte_len() && digit(text.byte_at(i)) { i += 1 }
-        if begin == i { ret false }
+        while i < text.byte_len() && digit(text.byte_at(i)) {
+            i += 1
+        }
+        if begin == i {
+            ret false
+        }
     }
-    if i < text.byte_len() && (text.byte_at(i) == 101 || text.byte_at(i) == 69) {
+    if i < text.byte_len() &&(text.byte_at(i) == 101 || text.byte_at(i) == 69) {
         fraction = true i += 1
-        if i < text.byte_len() && (text.byte_at(i) == 43 || text.byte_at(i) == 45) { i += 1 }
+        if i < text.byte_len() &&(text.byte_at(i) == 43 || text.byte_at(i) == 45) {
+            i += 1
+        }
         let begin = i
-        while i < text.byte_len() && digit(text.byte_at(i)) { i += 1 }
-        if begin == i { ret false }
+        while i < text.byte_len() && digit(text.byte_at(i)) {
+            i += 1
+        }
+        if begin == i {
+            ret false
+        }
     }
     ret fraction && i == text.byte_len()
 }
 fn decimal(text: str, start: usize, count: usize) -> usize {
-    if start + count > text.byte_len() { ret 999999 }
+    if start + count > text.byte_len() {
+        ret 999999
+    }
     let mut value = 0_usize
     for i in start..start + count {
-        if !digit(text.byte_at(i)) { ret 999999 }
-        value = value * 10 + ((text.byte_at(i) - 48) as usize)
+        if !digit(text.byte_at(i)) {
+            ret 999999
+        }
+        value = value * 10 +((text.byte_at(i) - 48) as usize)
     }
     ret value
 }
 fn date_time_valid(text: str) -> bool {
     let mut i = 0_usize
     if text.byte_len() >= 10 && text.byte_at(4) == 45 {
-        if text.byte_at(7) != 45 { ret false }
+        if text.byte_at(7) != 45 {
+            ret false
+        }
         let year = decimal(text, 0, 4)
         let month = decimal(text, 5, 2)
         let day = decimal(text, 8, 2)
-        if year > 9999 || month < 1 || month > 12 || day < 1 { ret false }
-        let mut days = 31_usize
-        if month == 4 || month == 6 || month == 9 || month == 11 { days = 30 }
-        if month == 2 {
-            days = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 29_usize } else { 28_usize }
+        if year > 9999 || month < 1 || month > 12 || day < 1 {
+            ret false
         }
-        if day > days { ret false }
-        if text.byte_len() == 10 { ret true }
+        let mut days = 31_usize
+        if month == 4 || month == 6 || month == 9 || month == 11 {
+            days = 30
+        }
+        if month == 2 {
+            days = if year % 4 == 0 &&(year % 100 != 0 || year % 400 == 0) {
+                29_usize
+            } else {
+                28_usize
+            }
+        }
+        if day > days {
+            ret false
+        }
+        if text.byte_len() == 10 {
+            ret true
+        }
         let delimiter = text.byte_at(10)
-        if delimiter != 84 && delimiter != 116 && delimiter != 32 { ret false }
+        if delimiter != 84 && delimiter != 116 && delimiter != 32 {
+            ret false
+        }
         i = 11
     }
     let time_start = i
     if i + 8 > text.byte_len() || text.byte_at(i + 2) != 58 || text.byte_at(i + 5) != 58 ||
-        decimal(text, i, 2) > 23 || decimal(text, i + 3, 2) > 59 || decimal(text, i + 6, 2) > 59 { ret false }
+    decimal(text, i, 2) > 23 || decimal(text, i + 3, 2) > 59 || decimal(text, i + 6, 2) > 59 {
+        ret false
+    }
     i += 8
     if i < text.byte_len() && text.byte_at(i) == 46 {
         i += 1 let begin = i
-        while i < text.byte_len() && digit(text.byte_at(i)) { i += 1 }
-        if begin == i { ret false }
+        while i < text.byte_len() && digit(text.byte_at(i)) {
+            i += 1
+        }
+        if begin == i {
+            ret false
+        }
     }
-    if i == text.byte_len() { ret true }
-    if time_start == 0 { ret false }
-    if (text.byte_at(i) == 90 || text.byte_at(i) == 122) && i + 1 == text.byte_len() { ret true }
-    ret i + 6 == text.byte_len() && (text.byte_at(i) == 43 || text.byte_at(i) == 45) && text.byte_at(i + 3) == 58 &&
-        decimal(text, i + 1, 2) <= 23 && decimal(text, i + 4, 2) <= 59
+    if i == text.byte_len() {
+        ret true
+    }
+    if time_start == 0 {
+        ret false
+    }
+    if (text.byte_at(i) == 90 || text.byte_at(i) == 122) && i + 1 == text.byte_len() {
+        ret true
+    }
+    ret i + 6 == text.byte_len() &&(text.byte_at(i) == 43 || text.byte_at(i) == 45) && text.byte_at(i + 3) == 58 &&
+    decimal(text, i + 1, 2) <= 23 && decimal(text, i + 4, 2) <= 59
 }
-pub fn parse(source: str) -> Result[TomlDocument, ParseError] { ret parse_with_limits(source, Limits::new()) }
+pub fn parse(source: str) -> Result[TomlDocument, ParseError] {
+    ret parse_with_limits(source, Limits::new())
+}
 pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, ParseError] {
     let mut parser = Parser { source, 0, limits, 0 }
-    if source.byte_len() > limits.max_input_bytes() { ret Result::Err(fail(parser, "TOML input limit exceeded")) }
-    if !unsafe { encore_codec_str_utf8_valid(source) } { ret Result::Err(fail(parser, "invalid UTF-8 document")) }
+    if source.byte_len() > limits.max_input_bytes() {
+        ret Result::Err(fail(parser, "TOML input limit exceeded"))
+    }
+    if !unsafe {
+        encore_codec_str_utf8_valid(source)
+    }
+    {
+        ret Result::Err(fail(parser, "invalid UTF-8 document"))
+    }
     charge(parser, 1, 8192)?
     let root = Dict[str, TomlValue]::with_capacity(0)
     let mut sections = Dict[str, Dict[str, TomlValue]]::new()
@@ -432,13 +696,19 @@ pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, Pa
     let mut current = root
     while parser.index < source.byte_len() {
         whitespace(parser)?
-        if parser.index == source.byte_len() { break }
+        if parser.index == source.byte_len() {
+            break
+        }
         if byte(parser) == 91 {
             parser.index += 1
             let array = byte(parser) == 91
-            if array { parser.index += 1 }
+            if array {
+                parser.index += 1
+            }
             let path = key_path(parser)? expect(parser, 93)?
-            if array { expect(parser, 93)? }
+            if array {
+                expect(parser, 93)?
+            }
             let mut parent = path_table(parser, root, path, path.len() - 1, false, false)?
             let name = path.last().unwrap_or("")
             // Parent table identity distinguishes repeated array-of-table items.
@@ -446,30 +716,53 @@ pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, Pa
             let mut display = ""
             for item in path {
                 canonical += Debug::fmt(item.byte_len()) + ":" + item + ";"
-                if display != "" { display += "." } display += item
+                if display != "" {
+                    display += "."
+                }
+                display += item
             }
             if array {
                 let mut items = match parent.get(name) {
-                    Some(value) => match value { TomlValue::TableArray(items) => items _ => { ret Result::Err(fail(parser, "array table conflicts with existing value")) } }
+                    Some(value) => match value {
+                        TomlValue::TableArray(items) => items _ => {
+                            ret Result::Err(fail(parser, "array table conflicts with existing value"))
+                        }
+                    }
                     None => Vec[TomlValue]::new()
                 }
-                if items.len() >= limits.max_collection_items() { ret Result::Err(fail(parser, "array table limit exceeded")) }
+                if items.len() >= limits.max_collection_items() {
+                    ret Result::Err(fail(parser, "array table limit exceeded"))
+                }
                 charge(parser, 1, 4096)?
                 current = Dict[str, TomlValue]::new()
                 items.push(TomlValue::Table(current)) parent.insert(name, TomlValue::TableArray(items))
                 // Declarations below this array element belong to its new scope.
                 let mut remove = Vec[str]::new()
-                for key in declared.keys() { if key.byte_len() > canonical.byte_len() && key.slice_bytes(0, canonical.byte_len()) == canonical { remove.push(key) } }
-                for key in remove { declared.remove(key) }
+                for key in declared.keys() {
+                    if key.byte_len() > canonical.byte_len() && key.slice_bytes(0, canonical.byte_len()) == canonical {
+                        remove.push(key)
+                    }
+                }
+                for key in remove {
+                    declared.remove(key)
+                }
             } else {
-                if declared.insert(canonical, true).is_some() { ret Result::Err(fail(parser, "duplicate table declaration")) }
+                if declared.insert(canonical, true).is_some() {
+                    ret Result::Err(fail(parser, "duplicate table declaration"))
+                }
                 current = path_table(parser, root, path, path.len(), false, true)?
             }
             sections.insert(display, current)
-        } else { assignment(parser, current, 0)? }
+        } else {
+            assignment(parser, current, 0)?
+        }
         horizontal(parser)
-        if byte(parser) == 35 { comment(parser)? }
-        if parser.index < source.byte_len() && byte(parser) != 10 && byte(parser) != 13 { ret Result::Err(fail(parser, "trailing characters after TOML value")) }
+        if byte(parser) == 35 {
+            comment(parser)?
+        }
+        if parser.index < source.byte_len() && byte(parser) != 10 && byte(parser) != 13 {
+            ret Result::Err(fail(parser, "trailing characters after TOML value"))
+        }
         line_break(parser)?
     }
     let mut queue = Vec[(str, Dict[str, TomlValue])]::new()
@@ -478,11 +771,20 @@ pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, Pa
     while cursor < queue.len() {
         let parent = queue.get(cursor).unwrap_or(("", root))
         for entry in parent.1.items() {
-            let name = if parent.0 == "" { entry.0 } else { parent.0 + "." + entry.0 }
+            let name = if parent.0 == "" {
+                entry.0
+            } else {
+                parent.0 + "." + entry.0
+            }
             match entry.1 {
-                TomlValue::Table(table) => { charge(parser, 1, 256)? sections.insert(name, table) queue.push((name, table)) }
-                TomlValue::DottedTable(table) => { charge(parser, 1, 256)? sections.insert(name, table) queue.push((name, table)) }
-                _ => {}
+                TomlValue::Table(table) => {
+                    charge(parser, 1, 256)? sections.insert(name, table) queue.push((name, table))
+                }
+                TomlValue::DottedTable(table) => {
+                    charge(parser, 1, 256)? sections.insert(name, table) queue.push((name, table))
+                }
+                _ => {
+                }
             }
         }
         cursor += 1
@@ -492,48 +794,109 @@ pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, Pa
 /// Compatibility wrapper. New callers should propagate parse() errors.
 pub fn toml_parse_document(source: str) -> TomlDocument {
     match parse(source) {
-        Ok(document) => { ret document }
-        Err(error) => { panic("TOML: " + error.message() + " at " + Debug::fmt(error.line()) + ":" + Debug::fmt(error.column())) }
+        Ok(document) => {
+            ret document
+        }
+        Err(error) => {
+            panic("TOML: " + error.message() + " at " + Debug::fmt(error.line()) + ":" + Debug::fmt(error.column()))
+            // panic exits the process; the seed has no never-return type.
+            ret TomlDocument { Dict[str, TomlValue]::new(), Dict[str, Dict[str, TomlValue]]::new(), 0 }
+        }
     }
 }
-pub fn toml_get_root(doc: TomlDocument, key: str) -> Option[TomlValue] { ret doc.root.get(key) }
+pub fn toml_get_root(doc: TomlDocument, key: str) -> Option[TomlValue] {
+    ret doc.root.get(key)
+}
 pub fn toml_get(doc: TomlDocument, section: str, key: str) -> Option[TomlValue] {
-    if section == "" { ret doc.root.get(key) }
-    match doc.sections.get(section) { Some(table) => { ret table.get(key) } None => { ret Option::None } }
+    if section == "" {
+        ret doc.root.get(key)
+    }
+    match doc.sections.get(section) {
+        Some(table) => {
+            ret table.get(key)
+        }
+        None => {
+            ret Option::None
+        }
+    }
 }
 pub fn toml_get_string(doc: TomlDocument, section: str, key: str) -> Option[str] {
-    ret match toml_get(doc, section, key) { Some(value) => match value { TomlValue::String(item) => Option[str]::Some(item) _ => Option[str]::None } None => Option[str]::None }
+    ret match toml_get(doc, section, key) {
+        Some(value) => match value {
+            TomlValue::String(item) => Option[str]::Some(item) _ => Option[str]::None
+        }
+        None => Option[str]::None
+    }
 }
 pub fn toml_get_bool(doc: TomlDocument, section: str, key: str) -> Option[u1] {
-    ret match toml_get(doc, section, key) { Some(value) => match value { TomlValue::Bool(item) => Option[u1]::Some(item) _ => Option[u1]::None } None => Option[u1]::None }
+    ret match toml_get(doc, section, key) {
+        Some(value) => match value {
+            TomlValue::Bool(item) => Option[u1]::Some(item) _ => Option[u1]::None
+        }
+        None => Option[u1]::None
+    }
 }
 pub fn toml_get_i64(doc: TomlDocument, section: str, key: str) -> Option[i64] {
-    ret match toml_get(doc, section, key) { Some(value) => match value { TomlValue::Integer(item) => Option[i64]::Some(item) _ => Option[i64]::None } None => Option[i64]::None }
+    ret match toml_get(doc, section, key) {
+        Some(value) => match value {
+            TomlValue::Integer(item) => Option[i64]::Some(item) _ => Option[i64]::None
+        }
+        None => Option[i64]::None
+    }
 }
 pub fn toml_get_integer(doc: TomlDocument, section: str, key: str) -> Option[i32] {
     match toml_get_i64(doc, section, key) {
-        Some(value) => { if value >= -2147483648_i64 && value <= 2147483647_i64 { ret Option::Some(value as i32) } }
-        None => {}
+        Some(value) => {
+            if value >= - 2147483648_i64 && value <= 2147483647_i64 {
+                ret Option::Some(value as i32)
+            }
+        }
+        None => {
+        }
     }
     ret Option::None
 }
 pub fn toml_get_string_array(doc: TomlDocument, section: str, key: str) -> Option[Vec[str]] {
     match toml_get(doc, section, key) {
         Some(value) => match value {
-            TomlValue::StringArray(values) => { ret Option::Some(values) }
+            TomlValue::StringArray(values) => {
+                ret Option::Some(values)
+            }
             TomlValue::Array(values) => {
                 let mut out = Vec[str]::with_capacity(values.len())
-                for value in values { match value { TomlValue::String(text) => { out.push(text) } _ => { ret Option::None } } }
+                for value in values {
+                    match value {
+                        TomlValue::String(text) => {
+                            out.push(text)
+                        }
+                        _ => {
+                            ret Option::None
+                        }
+                    }
+                }
                 ret Option::Some(out)
             }
-            _ => { ret Option::None }
+            _ => {
+                ret Option::None
+            }
         }
-        None => { ret Option::None }
+        None => {
+            ret Option::None
+        }
     }
 }
 pub fn toml_section_keys(doc: TomlDocument, section: str) -> Vec[str] {
-    if section == "" { ret doc.root.keys() }
-    match doc.sections.get(section) { Some(table) => { ret table.keys() } None => { ret Vec[str]::new() } }
+    if section == "" {
+        ret doc.root.keys()
+    }
+    match doc.sections.get(section) {
+        Some(table) => {
+            ret table.keys()
+        }
+        None => {
+            ret Vec[str]::new()
+        }
+    }
 }
 
 extern fn encore_text_builder_new() -> usize
@@ -657,12 +1020,12 @@ fn hex_digit(value: usize) -> str {
     ret "F"
 }
 
-
 //! Typed TOML codecs. Traversal is specialized from core::reflect metadata.
 import core::reflect
-import core::reflect::{TypeInfo, Kind, BuildError}
-import serialize::{Serializer, Deserializer}
 import core::num::parse as parse_integer
+import core::reflect::{BuildError, Kind, TypeInfo}
+
+import serialize::{Deserializer, Serializer}
 
 extern fn encore_codec_text_builder_new(limit: usize) -> usize
 extern fn encore_codec_text_builder_ok(builder: usize) -> bool
@@ -775,7 +1138,9 @@ pub fn encode_with[Value](value: Value, options: EncodeOptions) -> Result[str, E
 pub fn decode_with[Value](source: str, options: DecodeOptions) -> Result[Value, Error] {
     let document = match parse_with_limits(source, options.limits) {
         Ok(value) => value
-        Err(error) => { ret Result::Err(invalid(error.message()).with_offset(error.position())) }
+        Err(error) => {
+            ret Result::Err(invalid(error.message()).with_offset(error.position()))
+        }
     }
     let mut budget = DecodeBudget { options.limits, document.allocated }
     ret read_value(reflect::type_info[Value](), TomlValue::Table(document.root), budget, 0)
@@ -824,9 +1189,14 @@ fn quoted(writer: mut Writer, text: str) -> Result[(), Error] {
     writer.bytes += text.byte_len() * 6
     ret push(writer, "\"")
 }
-fn newline(writer: mut Writer, depth: usize) -> Result[(), Error] { ret Result::Ok(()) }
+fn newline(writer: mut Writer, depth: usize) -> Result[(), Error] {
+    ret Result::Ok(())
+}
 fn separator(writer: mut Writer, index: usize, depth: usize) -> Result[(), Error] {
-    if index != 0 { push(writer, ", ")? } ret Result::Ok(())
+    if index != 0 {
+        push(writer, ", ")?
+    }
+    ret Result::Ok(())
 }
 fn nested_error(result: Result[(), Error], segment: str) -> Result[(), Error] {
     ret match result {
@@ -874,7 +1244,9 @@ fn write_value[Value](value: Value, writer: mut Writer, depth: usize) -> Result[
                 push(writer, "{")?
                 let mut index = 0_usize
                 for item in value.items() {
-                    if absent(item.1) { continue }
+                    if absent(item.1) {
+                        continue
+                    }
                     separator(writer, index, depth + 1)? quoted(writer, item.0)? push(writer, " = ")?
                     if writer.options.indentation != 0 {
                         push(writer, " ")?
@@ -918,11 +1290,15 @@ fn write_value[Value](value: Value, writer: mut Writer, depth: usize) -> Result[
             ret push(writer, Debug::fmt(value))
         }
         Kind::U64 => {
-            if (value as u64) > 9223372036854775807_u64 { ret Result::Err(Error::new(ErrorKind::OutOfRange, "TOML integers are signed i64")) }
+            if (value as u64) > 9223372036854775807_u64 {
+                ret Result::Err(Error::new(ErrorKind::OutOfRange, "TOML integers are signed i64"))
+            }
             ret push(writer, Debug::fmt(value))
         }
         Kind::Usize => {
-            if (value as u64) > 9223372036854775807_u64 { ret Result::Err(Error::new(ErrorKind::OutOfRange, "TOML integers are signed i64")) }
+            if (value as u64) > 9223372036854775807_u64 {
+                ret Result::Err(Error::new(ErrorKind::OutOfRange, "TOML integers are signed i64"))
+            }
             ret push(writer, Debug::fmt(value))
         }
         Kind::I8 => {
@@ -941,19 +1317,47 @@ fn write_value[Value](value: Value, writer: mut Writer, depth: usize) -> Result[
             ret push(writer, Debug::fmt(value))
         }
         Kind::F32 => {
-            if value != value { ret push(writer, "nan") }
-            if value - value != 0.0_f32 { ret push(writer, if value < 0.0_f32 { "-inf" } else { "inf" }) }
-            let text = unsafe { encore_codec_format_f32(value) }
+            if value != value {
+                ret push(writer, "nan")
+            }
+            if value - value != 0.0_f32 {
+                ret push(writer, if value < 0.0_f32 {
+                        "-inf"
+                    } else {
+                        "inf"
+                    }
+                    ,
+                )
+            }
+            let text = unsafe {
+                encore_codec_format_f32(value)
+            }
             push(writer, text)?
-            if !text.contains(".") && !text.contains("e") && !text.contains("E") { push(writer, ".0")? }
+            if !text.contains(".") && !text.contains("e") && !text.contains("E") {
+                push(writer, ".0")?
+            }
             ret Result::Ok(())
         }
         Kind::F64 => {
-            if value != value { ret push(writer, "nan") }
-            if value - value != 0.0_f64 { ret push(writer, if value < 0.0_f64 { "-inf" } else { "inf" }) }
-            let text = unsafe { encore_codec_format_f64(value) }
+            if value != value {
+                ret push(writer, "nan")
+            }
+            if value - value != 0.0_f64 {
+                ret push(writer, if value < 0.0_f64 {
+                        "-inf"
+                    } else {
+                        "inf"
+                    }
+                    ,
+                )
+            }
+            let text = unsafe {
+                encore_codec_format_f64(value)
+            }
             push(writer, text)?
-            if !text.contains(".") && !text.contains("e") && !text.contains("E") { push(writer, ".0")? }
+            if !text.contains(".") && !text.contains("e") && !text.contains("E") {
+                push(writer, ".0")?
+            }
             ret Result::Ok(())
         }
         Kind::Struct => {
@@ -961,13 +1365,14 @@ fn write_value[Value](value: Value, writer: mut Writer, depth: usize) -> Result[
             push(writer, "{")?
             let mut index = 0_usize
             for field in info.fields() {
-                if absent(field.get(value)) { continue }
-                separator(writer, index, depth + 1)? quoted(writer, field.attribute("serialize.rename").unwrap_or(field.name()))? push(writer, " = ")?
-                if writer.options.indentation != 0 {
-                    push(writer, " ")?
+                if !absent(field.get(value)) {
+                    separator(writer, index, depth + 1)? quoted(writer, field.attribute("serialize.rename").unwrap_or(field.name()))? push(writer, " = ")?
+                    if writer.options.indentation != 0 {
+                        push(writer, " ")?
+                    }
+                    nested_error(write_value(field.get(value), writer, depth + 1), field.attribute("serialize.rename").unwrap_or(field.name()))?
+                    index += 1
                 }
-                nested_error(write_value(field.get(value), writer, depth + 1), field.attribute("serialize.rename").unwrap_or(field.name()))?
-                index += 1
             }
             if index != 0 {
                 newline(writer, depth)?
@@ -1065,7 +1470,9 @@ fn read_value[Value](info: TypeInfo[Value], node: TomlValue, budget: mut DecodeB
                 TomlValue::String(value) => {
                     ret Result::Ok(value)
                 }
-                TomlValue::DateTime(value) => { ret Result::Ok(value) }
+                TomlValue::DateTime(value) => {
+                    ret Result::Ok(value)
+                }
                 _ => {
                     ret Result::Err(invalid("expected string"))
                 }
@@ -1183,7 +1590,9 @@ fn read_value[Value](info: TypeInfo[Value], node: TomlValue, budget: mut DecodeB
         }
         Kind::F32 => {
             let text = read_number(node)?
-            let value = unsafe { encore_codec_parse_f32(text) }
+            let value = unsafe {
+                encore_codec_parse_f32(text)
+            }
             if value - value != 0.0_f32 && text != "inf" && text != "+inf" && text != "-inf" && text != "nan" && text != "+nan" && text != "-nan" {
                 ret Result::Err(Error::new(ErrorKind::OutOfRange, "number is outside f32 range"))
             }
@@ -1191,7 +1600,9 @@ fn read_value[Value](info: TypeInfo[Value], node: TomlValue, budget: mut DecodeB
         }
         Kind::F64 => {
             let text = read_number(node)?
-            let value = unsafe { encore_codec_parse_f64(text) }
+            let value = unsafe {
+                encore_codec_parse_f64(text)
+            }
             if value - value != 0.0_f64 && text != "inf" && text != "+inf" && text != "-inf" && text != "nan" && text != "+nan" && text != "-nan" {
                 ret Result::Err(Error::new(ErrorKind::OutOfRange, "number is outside f64 range"))
             }
@@ -1360,7 +1771,7 @@ fn read_dict[Item](info: TypeInfo[Item], node: TomlValue, budget: mut DecodeBudg
     let limits = budget.limits
     let fields = match node {
         TomlValue::Table(fields) => fields
-                TomlValue::InlineTable(fields) => fields _ => {
+        TomlValue::InlineTable(fields) => fields _ => {
             ret Result::Err(invalid("expected object"))
         }
     }
@@ -1385,10 +1796,11 @@ fn read_dict[Item](info: TypeInfo[Item], node: TomlValue, budget: mut DecodeBudg
     ret Result::Ok(result)
 }
 
-
-
 fn absent[Value](value: Value) -> bool {
-    if reflect::type_info[Value]().is_template[Option]() { ret value.is_none() }
+    let info = reflect::type_info[Value]()
+    if info.is_template[Option]() {
+        ret value.is_none()
+    }
     ret false
 }
 fn write_document[Value](value: Value, writer: mut Writer) -> Result[(), Error] {
@@ -1396,15 +1808,21 @@ fn write_document[Value](value: Value, writer: mut Writer) -> Result[(), Error] 
     if info.is_template[Dict]() {
         match info.argument(0).kind() {
             Kind::String => {
-                if value.len() > writer.options.limits.max_collection_items() { ret Result::Err(limit()) }
+                if value.len() > writer.options.limits.max_collection_items() {
+                    ret Result::Err(limit())
+                }
                 for entry in value.items() {
-                    if absent(entry.1) { continue }
+                    if absent(entry.1) {
+                        continue
+                    }
                     quoted(writer, entry.0)? push(writer, " = ")?
                     nested_error(write_value(entry.1, writer, 1), entry.0)? push(writer, "\n")?
                 }
                 ret Result::Ok(())
             }
-            _ => { ret Result::Err(Error::new(ErrorKind::UnsupportedType, "TOML table keys must be strings")) }
+            _ => {
+                ret Result::Err(Error::new(ErrorKind::UnsupportedType, "TOML table keys must be strings"))
+            }
         }
     }
     match info.kind() {
@@ -1412,16 +1830,21 @@ fn write_document[Value](value: Value, writer: mut Writer) -> Result[(), Error] 
             record_schema(info)?
             let mut count = 0_usize
             for field in info.fields() {
-                if absent(field.get(value)) { continue }
-                if count >= writer.options.limits.max_collection_items() { ret Result::Err(limit()) }
-                let name = field.attribute("serialize.rename").unwrap_or(field.name())
-                quoted(writer, name)? push(writer, " = ")?
-                nested_error(write_value(field.get(value), writer, 1), name)? push(writer, "\n")?
-                count += 1
+                if !absent(field.get(value)) {
+                    if count >= writer.options.limits.max_collection_items() {
+                        ret Result::Err(limit())
+                    }
+                    let name = field.attribute("serialize.rename").unwrap_or(field.name())
+                    quoted(writer, name)? push(writer, " = ")?
+                    nested_error(write_value(field.get(value), writer, 1), name)? push(writer, "\n")?
+                    count += 1
+                }
             }
             ret Result::Ok(())
         }
-        _ => { ret Result::Err(Error::new(ErrorKind::UnsupportedType, "TOML document must be a struct or dictionary")) }
+        _ => {
+            ret Result::Err(Error::new(ErrorKind::UnsupportedType, "TOML document must be a struct or dictionary"))
+        }
     }
 }
 
@@ -1429,7 +1852,9 @@ fn record_schema[Value](info: TypeInfo[Value]) -> Result[(), Error] {
     let mut names = Dict[str, bool]::new()
     for field in info.fields() {
         let name = field.attribute("serialize.rename").unwrap_or(field.name())
-        if names.insert(name, true).is_some() { ret Result::Err(Error::new(ErrorKind::InvalidSchema, "duplicate serialized field name").at(name)) }
+        if names.insert(name, true).is_some() {
+            ret Result::Err(Error::new(ErrorKind::InvalidSchema, "duplicate serialized field name").at(name))
+        }
     }
     ret Result::Ok(())
 }

@@ -264,9 +264,17 @@ fn string_body(parser: mut Parser, quote: u8, basic: bool, multiline: bool, buil
             } elif escape == 92 {
                 text_builder_append(builder, "\\")
             } elif escape == 98 {
-                text_builder_append(builder, unsafe { encore_str_from_codepoint(8) })
+                text_builder_append(builder, unsafe {
+                        encore_str_from_codepoint(8)
+                    }
+                    ,
+                )
             } elif escape == 102 {
-                text_builder_append(builder, unsafe { encore_str_from_codepoint(12) })
+                text_builder_append(builder, unsafe {
+                        encore_str_from_codepoint(12)
+                    }
+                    ,
+                )
             } elif escape == 110 {
                 text_builder_append(builder, "\n")
             } elif escape == 114 {
@@ -807,7 +815,9 @@ pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, Pa
 }
 fn entry_snapshot(table: Dict[str, TomlValue]) -> Vec[TomlEntry] {
     let mut entries = Vec[TomlEntry]::with_capacity(table.len())
-    for item in table.items() { entries.push(TomlEntry { item.0, item.1 }) }
+    for item in table.items() {
+        entries.push(TomlEntry { item.0, item.1 })
+    }
     ret entries
 }
 /// Compatibility wrapper. New callers should propagate parse() errors.

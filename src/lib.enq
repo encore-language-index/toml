@@ -44,8 +44,10 @@ pub struct TomlSection {
     entries: Vec[TomlEntry]
 }
 pub struct TomlDocument {
-    root: Dict[str, TomlValue]
-    sections: Dict[str, Dict[str, TomlValue]]
+    root: Vec[TomlEntry]
+    sections: Vec[TomlSection]
+    root_index: Dict[str, TomlValue]
+    section_index: Dict[str, Dict[str, TomlValue]]
     allocated: usize
 }
 pub struct ParseError {
@@ -262,9 +264,9 @@ fn string_body(parser: mut Parser, quote: u8, basic: bool, multiline: bool, buil
             } elif escape == 92 {
                 text_builder_append(builder, "\\")
             } elif escape == 98 {
-                text_builder_append(builder, "\b")
+                text_builder_append(builder, unsafe { encore_str_from_codepoint(8) })
             } elif escape == 102 {
-                text_builder_append(builder, "\f")
+                text_builder_append(builder, unsafe { encore_str_from_codepoint(12) })
             } elif escape == 110 {
                 text_builder_append(builder, "\n")
             } elif escape == 114 {
@@ -768,6 +770,15 @@ pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, Pa
         }
         line_break(parser)?
     }
+    charge(parser, 1, 512)?
+    charge(parser, sections.len(), 256)?
+    let mut section_views = Vec[TomlSection]::with_capacity(sections.len())
+    for section in sections.items() {
+        charge(parser, 1, 512)? charge(parser, section.1.len(), 256)?
+        section_views.push(TomlSection { section.0, entry_snapshot(section.1) })
+    }
+    charge(parser, 1, 512)? charge(parser, root.len(), 256)?
+    let root_view = entry_snapshot(root)
     let mut queue = Vec[(str, Dict[str, TomlValue])]::new()
     queue.push(("", root))
     let mut cursor = 0_usize
@@ -792,7 +803,12 @@ pub fn parse_with_limits(source: str, limits: Limits) -> Result[TomlDocument, Pa
         }
         cursor += 1
     }
-    ret Result::Ok(TomlDocument { root, sections, parser.allocated })
+    ret Result::Ok(TomlDocument { root_view, section_views, root, sections, parser.allocated })
+}
+fn entry_snapshot(table: Dict[str, TomlValue]) -> Vec[TomlEntry] {
+    let mut entries = Vec[TomlEntry]::with_capacity(table.len())
+    for item in table.items() { entries.push(TomlEntry { item.0, item.1 }) }
+    ret entries
 }
 /// Compatibility wrapper. New callers should propagate parse() errors.
 pub fn toml_parse_document(source: str) -> TomlDocument {
@@ -804,19 +820,19 @@ pub fn toml_parse_document(source: str) -> TomlDocument {
             panic("TOML: " + error.message() + " at " + Debug::fmt(error.line()) + ":" + Debug::fmt(error.column()))
             // panic exits the process; the seed has no never-return type.
             ret TomlDocument {
-                Dict[str, TomlValue]::new(), Dict[str, Dict[str, TomlValue]]::new(), 0
+                Vec[TomlEntry]::new(), Vec[TomlSection]::new(), Dict[str, TomlValue]::new(), Dict[str, Dict[str, TomlValue]]::new(), 0
             }
         }
     }
 }
 pub fn toml_get_root(doc: TomlDocument, key: str) -> Option[TomlValue] {
-    ret doc.root.get(key)
+    ret doc.root_index.get(key)
 }
 pub fn toml_get(doc: TomlDocument, section: str, key: str) -> Option[TomlValue] {
     if section == "" {
-        ret doc.root.get(key)
+        ret doc.root_index.get(key)
     }
-    match doc.sections.get(section) {
+    match doc.section_index.get(section) {
         Some(table) => {
             ret table.get(key)
         }
@@ -864,28 +880,38 @@ pub fn toml_get_integer(doc: TomlDocument, section: str, key: str) -> Option[i32
 pub fn toml_get_string_array(doc: TomlDocument, section: str, key: str) -> Option[Vec[str]] {
     let value = match toml_get(doc, section, key) {
         Some(value) => value
-        None => { ret Option::None }
+        None => {
+            ret Option::None
+        }
     }
     match value {
-        TomlValue::StringArray(values) => { ret Option::Some(values) }
+        TomlValue::StringArray(values) => {
+            ret Option::Some(values)
+        }
         TomlValue::Array(values) => {
             let mut out = Vec[str]::with_capacity(values.len())
             for value in values {
                 match value {
-                    TomlValue::String(text) => { out.push(text) }
-                    _ => { ret Option::None }
+                    TomlValue::String(text) => {
+                        out.push(text)
+                    }
+                    _ => {
+                        ret Option::None
+                    }
                 }
             }
             ret Option::Some(out)
         }
-        _ => { ret Option::None }
+        _ => {
+            ret Option::None
+        }
     }
 }
 pub fn toml_section_keys(doc: TomlDocument, section: str) -> Vec[str] {
     if section == "" {
-        ret doc.root.keys()
+        ret doc.root_index.keys()
     }
-    match doc.sections.get(section) {
+    match doc.section_index.get(section) {
         Some(table) => {
             ret table.keys()
         }
@@ -1139,7 +1165,7 @@ pub fn decode_with[Value](source: str, options: DecodeOptions) -> Result[Value, 
         }
     }
     let mut budget = DecodeBudget { options.limits, document.allocated }
-    ret read_value(reflect::type_info[Value](), TomlValue::Table(document.root), budget, 0)
+    ret read_value(reflect::type_info[Value](), TomlValue::Table(document.root_index), budget, 0)
 }
 
 fn invalid(message: str) -> Error {

@@ -10,7 +10,8 @@ The parser supports signed 64-bit integers (including base prefixes and digit
 separators), floats, booleans, basic/literal and multiline strings, nested
 arrays, dotted/quoted keys, tables, arrays of tables, inline tables and validated
 local/offset date-time tokens. Tables use insertion-ordered hash indexes;
-line, whitespace and key scans are iterative. Resource limits bound input,
+line, whitespace and key scans are iterative. Legacy root/section entry views
+are retained alongside the indexes for existing manifest/plugin consumers. Resource limits bound input,
 allocation, nesting and collection sizes. This is not a claim of complete
 TOML conformance; conformance cases live in the package tests.
 

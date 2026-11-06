@@ -39,8 +39,7 @@ fn main() -> u32 {
             ret 5
         }
     }
-    let invalid = Vec[str]::new()
-    let mut cases = invalid
+    let mut cases = Vec[str]::new()
     cases.push("key = garbage") cases.push("key = 9223372036854775808")
     cases.push("key = 01") cases.push("key = 1__0") cases.push("key = \"bad\\q\"")
     cases.push("key = [1 2]") cases.push("key = 1\nkey = 2")
